@@ -7,10 +7,31 @@
     * { margin: 0; padding: 0; }
     body { background: #111; overflow: hidden; }
     canvas { display: block; }
+    #nameInput {
+      position: fixed;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, 10px);
+      z-index: 20;
+      background: rgba(255,255,255,0.1);
+      border: 2px solid #4fc3f7;
+      border-radius: 25px;
+      color: white;
+      font-size: 22px;
+      padding: 10px 24px;
+      text-align: center;
+      width: 380px;
+      outline: none;
+      font-family: sans-serif;
+      display: none;
+    }
+    #nameInput::placeholder { color: rgba(255,255,255,0.3); }
+    #nameInput:focus { border-color: #e91e63; box-shadow: 0 0 15px rgba(233,30,99,0.3); }
   </style>
 </head>
 <body>
 <canvas id="c"></canvas>
+<input type="text" id="nameInput" placeholder="Skriv ditt namn, tryck ENTER" maxlength="15" autocomplete="off">
 <script>
 const c = document.getElementById('c');
 const $ = c.getContext('2d');
@@ -19,22 +40,170 @@ c.height = innerHeight;
 addEventListener('resize', () => { c.width = innerWidth; c.height = innerHeight; });
 
 // --- CONFIG ---
-const WORLD = 3000;
-const FOOD_N = 500;
-const BOT_N = 12;
-const SPD = 3.5;
+const WORLD = 5000;
+const FOOD_N = 700;
+const BOT_N = 15;
+const SPD = 7;
 const SEG_GAP = 6;
 const SEG_R = 10;
 const HEAD_R = 18;
-const TURN = 0.065;
+const TURN = 0.12;
+const BOOST_SPD = 12;
+
+// --- FOOD EMOJIS ---
+const FOOD_EMOJIS = ['🍕','🍔','🥪','🍌','🍎','🍐','🥩','🌭','🍗','🌮','🍩','🍪','🧁','🍇','🍓','🍑','🥐','🧀'];
+
 
 // --- IMAGE & SOUND ---
 const headImg = new Image();
 headImg.src = 'player-head.png';
 const sndEat = new Audio('jammi.m4a');
 const sndDie = new Audio('d%C3%B6r.m4a');
-sndEat.volume = 0.6;
-sndDie.volume = 0.8;
+sndEat.volume = 1.0;
+sndDie.volume = 1.0;
+
+// --- BACKGROUND MUSIC (MIDI via Web Audio) ---
+let musicStarted = false;
+let midiCtx, midiMaster, midiPlaying = false;
+let parsedMidi = null;
+
+function startMusic() {
+  midiPlaying = true;
+  if (musicStarted) {
+    if (midiMaster) midiMaster.gain.value = 0.025;
+    if (parsedMidi) playMidi(parsedMidi);
+    return;
+  }
+  musicStarted = true;
+  midiCtx = new (window.AudioContext || window.webkitAudioContext)();
+  midiMaster = midiCtx.createGain();
+  midiMaster.gain.value = 0.025;
+  midiMaster.connect(midiCtx.destination);
+
+  fetch('drwilly1.mid')
+    .then(r => r.arrayBuffer())
+    .then(buf => {
+      parsedMidi = parseMidi(new Uint8Array(buf));
+      playMidi(parsedMidi);
+    })
+    .catch(e => console.log('MIDI load failed:', e));
+}
+
+// Minimal MIDI parser
+function parseMidi(data) {
+  let pos = 0;
+  function read(n) { let v = 0; for (let i = 0; i < n; i++) v = (v << 8) | data[pos++]; return v; }
+  function readVar() { let v = 0, b; do { b = data[pos++]; v = (v << 7) | (b & 0x7f); } while (b & 0x80); return v; }
+  function str(n) { let s = ''; for (let i = 0; i < n; i++) s += String.fromCharCode(data[pos++]); return s; }
+
+  // Header
+  str(4); read(4); const fmt = read(2); const ntracks = read(2); const tpq = read(2);
+
+  const events = [];
+  let midiTempo = 500000; // default 120 BPM
+  for (let t = 0; t < ntracks; t++) {
+    str(4); let tlen = read(4); const end = pos + tlen;
+    let tick = 0, status = 0;
+    while (pos < end) {
+      tick += readVar();
+      let b = data[pos++];
+      if (b & 0x80) { status = b; } else { pos--; }
+      const type = status & 0xf0;
+      const ch = status & 0x0f;
+      if (type === 0x90 || type === 0x80) {
+        const note = data[pos++], vel = data[pos++];
+        events.push({ tick, type: vel > 0 && type === 0x90 ? 'on' : 'off', ch, note, vel });
+      } else if (type === 0xa0) { pos += 2; }
+      else if (type === 0xb0) { pos += 2; }
+      else if (type === 0xc0) { pos += 1; }
+      else if (type === 0xd0) { pos += 1; }
+      else if (type === 0xe0) { pos += 2; }
+      else if (status === 0xff) {
+        const mt = data[pos++]; const ml = readVar();
+        if (mt === 0x51 && ml === 3) {
+          midiTempo = (data[pos] << 16) | (data[pos+1] << 8) | data[pos+2];
+        }
+        pos += ml;
+      } else if (status === 0xf0 || status === 0xf7) { const sl = readVar(); pos += sl; }
+    }
+    pos = end;
+  }
+
+  events.sort((a, b) => a.tick - b.tick);
+  return { events, tpq, tempo: midiTempo };
+}
+
+function playMidi(midi) {
+  const secPerTick = (midi.tempo / 1000000) / midi.tpq;
+  const activeNotes = {};
+  const waveforms = ['square', 'sawtooth', 'triangle', 'sine'];
+
+  function midiToFreq(n) { return 440 * Math.pow(2, (n - 69) / 12); }
+
+  function scheduleChunk(startIdx, baseTime) {
+    if (!midiPlaying) return;
+    const startTick = startIdx < midi.events.length ? midi.events[startIdx].tick : 0;
+    let i = startIdx;
+    const chunkEnd = startTick + midi.tpq * 16; // schedule 16 beats ahead
+
+    while (i < midi.events.length && midi.events[i].tick < chunkEnd) {
+      const ev = midi.events[i];
+      const time = baseTime + (ev.tick - startTick) * secPerTick;
+      const key = ev.ch + '_' + ev.note;
+
+      if (ev.type === 'on') {
+        const osc = midiCtx.createOscillator();
+        const g = midiCtx.createGain();
+        osc.type = waveforms[ev.ch % waveforms.length];
+        osc.frequency.value = midiToFreq(ev.note);
+        const vol = (ev.vel / 127) * 0.15;
+        g.gain.setValueAtTime(vol, time);
+        osc.connect(g);
+        g.connect(midiMaster);
+        osc.start(time);
+        activeNotes[key] = { osc, g, startTime: time };
+      } else if (ev.type === 'off' && activeNotes[key]) {
+        const n = activeNotes[key];
+        const stopTime = Math.max(time, n.startTime + 0.01);
+        n.g.gain.setValueAtTime(n.g.gain.value, stopTime - 0.01);
+        n.g.gain.exponentialRampToValueAtTime(0.001, stopTime + 0.05);
+        n.osc.stop(stopTime + 0.06);
+        delete activeNotes[key];
+      }
+      i++;
+    }
+
+    if (i < midi.events.length) {
+      const nextTime = baseTime + (midi.events[i].tick - startTick) * secPerTick;
+      const delay = (nextTime - midiCtx.currentTime - 0.5) * 1000;
+      setTimeout(() => scheduleChunk(i, nextTime), Math.max(50, delay));
+    } else {
+      // Loop: restart after a short pause
+      const endTime = baseTime + (midi.events[midi.events.length-1].tick - startTick) * secPerTick;
+      const delay = (endTime - midiCtx.currentTime + 0.5) * 1000;
+      setTimeout(() => scheduleChunk(0, midiCtx.currentTime + 0.1), Math.max(50, delay));
+    }
+  }
+
+  scheduleChunk(0, midiCtx.currentTime + 0.1);
+}
+
+// --- HIGHSCORES ---
+function getHighscores() {
+  try { return JSON.parse(localStorage.getItem('orm_highscores') || '[]'); } catch { return []; }
+}
+function saveHighscore(name, score, kills, length) {
+  const hs = getHighscores();
+  hs.push({ name, score, kills, length, date: Date.now() });
+  hs.sort((a,b) => b.score - a.score);
+  while (hs.length > 10) hs.pop();
+  localStorage.setItem('orm_highscores', JSON.stringify(hs));
+  return hs;
+}
+function isHighscore(score) {
+  const hs = getHighscores();
+  return hs.length < 10 || score > (hs[hs.length-1]?.score || 0);
+}
 
 // --- STATE ---
 let foods = [], bots = [], particles = [];
@@ -42,12 +211,33 @@ let keys = {};
 let kills = 0;
 let phase = 'menu'; // menu, play, dying, dead
 let deathCam = { x: 0, y: 0 };
+let drawCam = { x: 0, y: 0 };
+let camScale = 1;
+let playerName = '';
+let lastScore = 0;
+let lastKills = 0;
+let lastLength = 0;
+let wasHighscore = false;
+const nameInput = document.getElementById('nameInput');
+
+// Show name input on menu
+function showNameInput() {
+  nameInput.style.display = 'block';
+  nameInput.focus();
+}
+function hideNameInput() {
+  nameInput.style.display = 'none';
+}
+
+// Init: show menu
+showNameInput();
 
 // --- SNAKE ---
-function makeSnake(x, y, col, name, len) {
+function makeSnake(x, y, skin, name, len) {
   const trail = [];
-  for (let i = 0; i < len * SEG_GAP + 30; i++) trail.push({x, y});
-  return { trail, col, name, len, angle: Math.random()*Math.PI*2, score: 0, alive: true, timer: 0, tgt: 0 };
+  const tlen = len * SEG_GAP + 30;
+  for (let i = 0; i < tlen; i++) trail.push({x, y});
+  return { trail, col: skin.col, col2: skin.col2, pattern: skin.pattern, name, len, angle: Math.random()*Math.PI*2, score: 0, alive: true, timer: 0, tgt: 0 };
 }
 
 let player;
@@ -56,16 +246,38 @@ function makeFood() {
   return {
     x: (Math.random()-0.5)*(WORLD-200),
     y: (Math.random()-0.5)*(WORLD-200),
-    r: 4 + Math.random()*5,
+    r: 10 + Math.random()*6,
+    emoji: FOOD_EMOJIS[Math.floor(Math.random()*FOOD_EMOJIS.length)],
     col: `hsl(${Math.random()*360},80%,60%)`
   };
 }
 
 const NAMES = ['Slither','PyThon','Cobra','Viper','Mamba','Naga','Boa','Asp','Hydra','Rattle','Sidewinder','Basilisk'];
-const COLS = ['#e91e63','#9c27b0','#3f51b5','#009688','#ff9800','#ff5722','#f44336','#2196f3','#4caf50','#ffeb3b','#00bcd4','#8bc34a'];
+// Skins: [primary, secondary, pattern]
+// patterns: 'stripes', 'dots', 'zigzag', 'gradient', 'camo', 'neon'
+const SKINS = [
+  { col: '#e91e63', col2: '#f48fb1', pattern: 'stripes' },    // Rosa randig
+  { col: '#9c27b0', col2: '#ce93d8', pattern: 'dots' },       // Lila prickig
+  { col: '#3f51b5', col2: '#7986cb', pattern: 'zigzag' },     // Blå zigzag
+  { col: '#009688', col2: '#80cbc4', pattern: 'gradient' },   // Teal gradient
+  { col: '#ff9800', col2: '#221100', pattern: 'camo' },       // Orange camo
+  { col: '#ff5722', col2: '#ffab91', pattern: 'neon' },       // Röd neon
+  { col: '#f44336', col2: '#ffffff', pattern: 'stripes' },    // Röd/vit randig
+  { col: '#2196f3', col2: '#0d47a1', pattern: 'dots' },       // Blå prickig
+  { col: '#4caf50', col2: '#1b5e20', pattern: 'camo' },       // Grön camo
+  { col: '#ffeb3b', col2: '#f57f17', pattern: 'zigzag' },     // Gul zigzag
+  { col: '#00bcd4', col2: '#e0f7fa', pattern: 'neon' },       // Cyan neon
+  { col: '#8bc34a', col2: '#33691e', pattern: 'gradient' },   // Limegrön gradient
+  { col: '#ff6f00', col2: '#fff176', pattern: 'stripes' },    // Orange/gul randig
+  { col: '#ad1457', col2: '#f8bbd0', pattern: 'dots' },       // Magenta prickig
+  { col: '#1a237e', col2: '#8c9eff', pattern: 'neon' },       // Marinblå neon
+];
 
 function initGame() {
-  player = makeSnake(0, 0, '#4fc3f7', 'Du', 15);
+  playerName = nameInput.value.trim() || 'Spelare';
+  hideNameInput();
+  startMusic();
+  player = makeSnake(0, 0, { col: '#4fc3f7', col2: '#0288d1', pattern: 'neon' }, playerName, 15);
   player.angle = 0;
   kills = 0;
   bots = [];
@@ -74,7 +286,7 @@ function initGame() {
   for (let i = 0; i < BOT_N; i++) {
     const a = Math.random()*Math.PI*2;
     const d = 200 + Math.random()*1000;
-    bots.push(makeSnake(Math.cos(a)*d, Math.sin(a)*d, COLS[i%COLS.length], NAMES[i%NAMES.length], 15+Math.floor(Math.random()*25)));
+    bots.push(makeSnake(Math.cos(a)*d, Math.sin(a)*d, SKINS[i%SKINS.length], NAMES[i%NAMES.length], 15+Math.floor(Math.random()*25)));
   }
   for (let i = 0; i < FOOD_N; i++) foods.push(makeFood());
   phase = 'play';
@@ -85,39 +297,65 @@ addEventListener('keydown', e => { keys[e.key]=true; if(e.key===' ')e.preventDef
 addEventListener('keyup', e => { keys[e.key]=false; });
 
 // --- HELPERS ---
-function dist(a,b) { return Math.hypot(a.x-b.x, a.y-b.y); }
-function head(s) { return s.trail[0]; }
+function dist2(a,b) { const dx=a.x-b.x, dy=a.y-b.y; return dx*dx+dy*dy; }
+function dist(a,b) { const dx=a.x-b.x, dy=a.y-b.y; return Math.sqrt(dx*dx+dy*dy); }
+function head(s) { return s.trail[s.trail.length - 1]; }
 function segs(s) {
   const out = [];
+  const tl = s.trail.length;
   for (let i = 0; i < s.len; i++) {
-    const idx = i * SEG_GAP;
-    if (idx < s.trail.length) out.push(s.trail[idx]);
+    const idx = tl - 1 - i * SEG_GAP;
+    if (idx >= 0) out.push(s.trail[idx]);
   }
   return out;
 }
 
 function moveSnake(s, spd) {
-  const h = s.trail[0];
-  s.trail.unshift({ x: h.x + Math.cos(s.angle)*spd, y: h.y + Math.sin(s.angle)*spd });
+  const h = s.trail[s.trail.length - 1];
+  s.trail.push({ x: h.x + Math.cos(s.angle) * spd, y: h.y + Math.sin(s.angle) * spd });
+  // Trim old trail — only when oversized, batch for performance
   const max = s.len * SEG_GAP + 40;
-  while (s.trail.length > max) s.trail.pop();
+  const excess = s.trail.length - max;
+  if (excess > 100) {
+    s.trail = s.trail.slice(excess);
+  }
 }
 
 function grow(s, n) {
   s.len += n;
-  const last = s.trail[s.trail.length-1];
-  for (let i = 0; i < n * SEG_GAP; i++) s.trail.push({x:last.x, y:last.y});
 }
 
 function killSnake(s) {
   s.alive = false;
   const sg = segs(s);
   for (let i = 0; i < sg.length; i += 2) {
-    foods.push({ x: sg[i].x+(Math.random()-0.5)*20, y: sg[i].y+(Math.random()-0.5)*20, r: 6+Math.random()*4, col: s.col });
+    foods.push({ x: sg[i].x+(Math.random()-0.5)*20, y: sg[i].y+(Math.random()-0.5)*20, r: 10+Math.random()*5, col: s.col, emoji: FOOD_EMOJIS[Math.floor(Math.random()*FOOD_EMOJIS.length)] });
   }
   for (let i = 0; i < 15; i++) {
     particles.push({ x: head(s).x, y: head(s).y, vx:(Math.random()-0.5)*8, vy:(Math.random()-0.5)*8, life:30, col: s.col, r: 3+Math.random()*4 });
   }
+}
+
+function stopMusic() {
+  midiPlaying = false;
+  if (midiMaster) midiMaster.gain.value = 0;
+}
+
+function playerDied(ph) {
+  stopMusic();
+  deathCam = { x: ph.x - c.width/2, y: ph.y - c.height/2 };
+  lastScore = player.score;
+  lastKills = kills;
+  lastLength = player.len;
+  wasHighscore = player.score > 0 && isHighscore(player.score);
+  killSnake(player);
+  sndDie.currentTime = 0;
+  sndDie.play().catch(()=>{});
+  phase = 'dying';
+  setTimeout(() => {
+    if (wasHighscore) saveHighscore(playerName, lastScore, lastKills, lastLength);
+    phase = 'dead';
+  }, 1500);
 }
 
 // --- UPDATE ---
@@ -139,23 +377,37 @@ function update() {
   if (keys['ArrowLeft']||keys['a']) player.angle -= TURN;
   if (keys['ArrowRight']||keys['d']) player.angle += TURN;
 
-  moveSnake(player, SPD);
+  // Boost
+  const isBoosting = keys[' '] && player.len > 15;
+  const spd = isBoosting ? BOOST_SPD : SPD;
+
+  if (isBoosting && Math.random() < 0.2) {
+    player.len--;
+    player.score = Math.max(0, player.score - 1);
+    const tail = player.trail[player.trail.length - 1];
+    if (tail) {
+      foods.push({
+        x: tail.x + (Math.random()-0.5)*15,
+        y: tail.y + (Math.random()-0.5)*15,
+        r: 8, col: player.col,
+        emoji: FOOD_EMOJIS[Math.floor(Math.random()*FOOD_EMOJIS.length)]
+      });
+    }
+  }
+
+  moveSnake(player, spd);
 
   // Boundary
   const ph = head(player);
   if (Math.abs(ph.x) > WORLD/2 || Math.abs(ph.y) > WORLD/2) {
-    deathCam = { x: ph.x - c.width/2, y: ph.y - c.height/2 };
-    killSnake(player);
-    sndDie.currentTime = 0;
-    sndDie.play().catch(()=>{});
-    phase = 'dying';
-    setTimeout(() => { phase = 'dead'; }, 1500);
+    playerDied(ph);
     return;
   }
 
-  // Player eats food
+  // Player eats food (hitbox scales with head size)
+  const playerHeadR = HEAD_R * (1 + player.len / 100);
   for (let i = foods.length-1; i >= 0; i--) {
-    if (dist(ph, foods[i]) < foods[i].r + HEAD_R) {
+    if (dist(ph, foods[i]) < foods[i].r + playerHeadR) {
       player.score++;
       grow(player, 2);
       particles.push({ x:foods[i].x, y:foods[i].y, vx:0, vy:0, life:15, col:foods[i].col, r:foods[i].r });
@@ -163,7 +415,7 @@ function update() {
       foods.push(makeFood());
       // Play eat sound
       const e = sndEat.cloneNode();
-      e.volume = 0.6;
+      e.volume = 1.0;
       e.play().catch(()=>{});
     }
   }
@@ -183,10 +435,10 @@ function update() {
         bot.tgt = Math.atan2(-bh.y, -bh.x);
       } else {
         // Find food
-        let best = null, bd = Infinity;
-        for (const f of foods) {
-          const d = dist(bh, f);
-          if (d < bd && d < 400) { bd = d; best = f; }
+        let best = null, bd = 160000; // 400^2
+        for (let fi = 0; fi < foods.length; fi += 4) {
+          const d = dist2(bh, foods[fi]);
+          if (d < bd) { bd = d; best = foods[fi]; }
         }
         if (best) bot.tgt = Math.atan2(best.y-bh.y, best.x-bh.x);
         else bot.tgt += (Math.random()-0.5)*1.5;
@@ -219,7 +471,7 @@ function update() {
 
     // Bot eats food
     for (let i = foods.length-1; i >= 0; i--) {
-      if (dist(bh, foods[i]) < foods[i].r + SEG_R + 5) {
+      if (dist2(bh, foods[i]) < (foods[i].r + SEG_R + 5) ** 2) {
         bot.score++;
         grow(bot, 2);
         foods.splice(i, 1);
@@ -228,30 +480,34 @@ function update() {
     }
   }
 
-  // --- COLLISIONS ---
+  // --- COLLISIONS (optimized with squared distances + skip far snakes) ---
+  const collR = SEG_R * 2;
+  const collR2 = collR * collR;
   const pSegs = segs(player);
 
   for (const bot of bots) {
     if (!bot.alive) continue;
+    const bh = head(bot);
+
+    // Quick distance check — skip if heads are too far apart
+    const maxReach = Math.max(player.len, bot.len) * SEG_GAP + 100;
+    if (dist2(ph, bh) > maxReach * maxReach) continue;
+
     const bSegs = segs(bot);
 
     // Player head hits bot body -> player dies
-    for (let i = 3; i < bSegs.length; i++) {
-      if (dist(ph, bSegs[i]) < SEG_R*2) {
-        deathCam = { x: ph.x - c.width/2, y: ph.y - c.height/2 };
-        killSnake(player);
-        sndDie.currentTime = 0;
-        sndDie.play().catch(()=>{});
-        phase = 'dying';
-        setTimeout(() => { phase = 'dead'; }, 1500);
+    const bStep = bSegs.length > 100 ? 2 : 1;
+    for (let i = 3; i < bSegs.length; i += bStep) {
+      if (dist2(ph, bSegs[i]) < collR2) {
+        playerDied(ph);
         return;
       }
     }
 
     // Bot head hits player body -> bot dies, player grows
-    const bh = head(bot);
-    for (let i = 3; i < pSegs.length; i++) {
-      if (dist(bh, pSegs[i]) < SEG_R*2) {
+    const pStep = pSegs.length > 100 ? 2 : 1;
+    for (let i = 3; i < pSegs.length; i += pStep) {
+      if (dist2(bh, pSegs[i]) < collR2) {
         const bonus = Math.floor(bot.len/2);
         player.score += bot.score + bonus;
         grow(player, bonus);
@@ -266,11 +522,15 @@ function update() {
   // Bot vs bot
   for (let i = 0; i < bots.length; i++) {
     if (!bots[i].alive) continue;
+    const ah = head(bots[i]);
     for (let j = 0; j < bots.length; j++) {
       if (i===j||!bots[j].alive) continue;
+      // Skip if far apart
+      const maxR = bots[j].len * SEG_GAP + 50;
+      if (dist2(ah, head(bots[j])) > maxR * maxR) continue;
       const bsj = segs(bots[j]);
       for (let k = 3; k < bsj.length; k++) {
-        if (dist(head(bots[i]), bsj[k]) < SEG_R*2) {
+        if (dist2(ah, bsj[k]) < collR2) {
           grow(bots[j], Math.floor(bots[i].len/3));
           bots[j].score += Math.floor(bots[i].len/3);
           killSnake(bots[i]);
@@ -295,7 +555,7 @@ function respawnBot(bot) {
   setTimeout(() => {
     const a = Math.random()*Math.PI*2;
     const d = 300+Math.random()*1000;
-    const nb = makeSnake(Math.cos(a)*d, Math.sin(a)*d, bot.col, bot.name, 15+Math.floor(Math.random()*20));
+    const nb = makeSnake(Math.cos(a)*d, Math.sin(a)*d, { col: bot.col, col2: bot.col2, pattern: bot.pattern }, bot.name, 15+Math.floor(Math.random()*20));
     const idx = bots.indexOf(bot);
     if (idx!==-1) bots[idx] = nb;
   }, 2000);
@@ -315,37 +575,62 @@ function draw() {
     return;
   }
   if (phase === 'dying') {
-    // Still show world with particles fading
+    // Reuse drawDead's world rendering but without the popup
     const cam = deathCam;
     $.save();
     $.translate(-cam.x, -cam.y);
-    drawGrid();
-    drawBorder();
-    drawFood();
-    drawParticles();
+    $.strokeStyle = 'rgba(255,255,255,0.03)'; $.lineWidth = 1;
+    const gx2 = Math.floor(cam.x/50)*50, gy2 = Math.floor(cam.y/50)*50;
+    for (let x = gx2; x < cam.x+c.width+50; x += 50) { $.beginPath(); $.moveTo(x, cam.y); $.lineTo(x, cam.y+c.height); $.stroke(); }
+    for (let y = gy2; y < cam.y+c.height+50; y += 50) { $.beginPath(); $.moveTo(cam.x, y); $.lineTo(cam.x+c.width, y); $.stroke(); }
+    $.strokeStyle = 'rgba(255,50,50,0.5)'; $.lineWidth = 4;
+    $.strokeRect(-WORLD/2, -WORLD/2, WORLD, WORLD);
+    const t2 = Date.now()/1000;
+    $.textAlign = 'center'; $.textBaseline = 'middle';
+    for (const f of foods) {
+      if (f.x<cam.x-30||f.x>cam.x+c.width+30||f.y<cam.y-30||f.y>cam.y+c.height+30) continue;
+      const bounce = 1+Math.sin(t2*2.5+f.x+f.y)*0.1;
+      $.font = `${Math.round(f.r*2*bounce)}px sans-serif`;
+      $.fillText(f.emoji, f.x, f.y);
+    }
+    $.textBaseline = 'alphabetic';
+    for (const p of particles) {
+      $.globalAlpha = Math.max(0, p.life/30);
+      $.beginPath(); $.arc(p.x, p.y, p.r, 0, Math.PI*2); $.fillStyle = p.col; $.fill();
+    }
+    $.globalAlpha = 1;
     for (const bot of bots) { if (bot.alive) drawSnakeBody(bot, false); }
     $.restore();
-    // Darken overlay
     $.fillStyle = 'rgba(0,0,0,0.3)';
     $.fillRect(0, 0, c.width, c.height);
     return;
   }
 
-  const cam = { x: head(player).x - c.width/2, y: head(player).y - c.height/2 };
+  // Zoom out as snake grows — scale from 1.0 down to 0.35 at length 300+
+  const targetScale = Math.max(0.35, 1.0 / (1 + player.len / 150));
+  camScale += (targetScale - camScale) * 0.02; // smooth transition
+
+  const viewW = c.width / camScale;
+  const viewH = c.height / camScale;
+  const ph2 = head(player);
+  const cam = { x: ph2.x - viewW/2, y: ph2.y - viewH/2 };
+  drawCam = cam;
 
   $.save();
+  $.scale(camScale, camScale);
   $.translate(-cam.x, -cam.y);
 
   // Grid
   $.strokeStyle = 'rgba(255,255,255,0.03)';
   $.lineWidth = 1;
-  const gx = Math.floor(cam.x/WORLD*WORLD/50)*50;
-  const gy = Math.floor(cam.y/WORLD*WORLD/50)*50;
-  for (let x = gx; x < cam.x+c.width+50; x += 50) {
-    $.beginPath(); $.moveTo(x, cam.y); $.lineTo(x, cam.y+c.height); $.stroke();
+  const gridStep = camScale < 0.5 ? 100 : 50; // coarser grid when zoomed out
+  const gx = Math.floor(cam.x/gridStep)*gridStep;
+  const gy = Math.floor(cam.y/gridStep)*gridStep;
+  for (let x = gx; x < cam.x+viewW+gridStep; x += gridStep) {
+    $.beginPath(); $.moveTo(x, cam.y); $.lineTo(x, cam.y+viewH); $.stroke();
   }
-  for (let y = gy; y < cam.y+c.height+50; y += 50) {
-    $.beginPath(); $.moveTo(cam.x, y); $.lineTo(cam.x+c.width, y); $.stroke();
+  for (let y = gy; y < cam.y+viewH+gridStep; y += gridStep) {
+    $.beginPath(); $.moveTo(cam.x, y); $.lineTo(cam.x+viewW, y); $.stroke();
   }
 
   // Border
@@ -353,19 +638,16 @@ function draw() {
   $.lineWidth = 4;
   $.strokeRect(-WORLD/2, -WORLD/2, WORLD, WORLD);
 
-  // Food
+  // Food (emoji)
   const t = Date.now()/1000;
+  $.textAlign = 'center';
+  $.textBaseline = 'middle';
   for (const f of foods) {
-    if (f.x<cam.x-30||f.x>cam.x+c.width+30||f.y<cam.y-30||f.y>cam.y+c.height+30) continue;
-    const p = 1+Math.sin(t*3+f.x)*0.2;
-    $.beginPath(); $.arc(f.x, f.y, f.r*p, 0, Math.PI*2);
-    $.fillStyle = f.col; $.fill();
-    // glow
-    $.beginPath(); $.arc(f.x, f.y, f.r*p*2, 0, Math.PI*2);
-    const gr = $.createRadialGradient(f.x,f.y,0,f.x,f.y,f.r*p*2);
-    gr.addColorStop(0, f.col.replace(')', ',0.25)')); gr.addColorStop(1, 'transparent');
-    $.fillStyle = gr; $.fill();
+    if (f.x<cam.x-30||f.x>cam.x+viewW+30||f.y<cam.y-30||f.y>cam.y+viewH+30) continue;
+    $.font = `${Math.round(f.r * 2)}px sans-serif`;
+    $.fillText(f.emoji, f.x, f.y);
   }
+  $.textBaseline = 'alphabetic';
 
   // Particles
   for (const p of particles) {
@@ -396,22 +678,55 @@ function draw() {
   drawMinimap();
 }
 
+function isPlayerBiggest() {
+  if (!player.alive) return false;
+  for (const b of bots) {
+    if (b.alive && b.len >= player.len) return false;
+  }
+  return true;
+}
+
 function drawSnakeBody(s, isPlayer) {
   const sg = segs(s);
+  const widthMult = 1 + Math.min(s.len, 900) / 100; // max 10x
+  const pat = s.pattern || 'stripes';
+  const margin = SEG_R * widthMult + 10;
+  const vw = c.width / camScale, vh = c.height / camScale;
+
+  // Skip every Nth segment when snake is very long (they overlap anyway)
+  const drawStep = s.len > 200 ? 3 : s.len > 100 ? 2 : 1;
+
   // Body (tail to head)
-  for (let i = sg.length-1; i >= 1; i--) {
+  for (let i = sg.length-1; i >= 1; i -= drawStep) {
     const p = sg[i];
+
+    // Viewport culling
+    if (p.x < drawCam.x - margin || p.x > drawCam.x + vw + margin ||
+        p.y < drawCam.y - margin || p.y > drawCam.y + vh + margin) continue;
+
     const t = 1 - i/sg.length;
-    // Width grows with snake length: base 10, scales up to ~24 at 100+ length
-    const widthMult = 1 + Math.min(s.len, 150) / 100;
-    const r = SEG_R * (0.4 + t*0.6) * widthMult;
-    $.beginPath(); $.arc(p.x, p.y, r+3, 0, Math.PI*2);
-    $.globalAlpha = 0.08; $.fillStyle = s.col; $.fill(); $.globalAlpha = 1;
+    const r = SEG_R * (0.5 + t*0.5) * widthMult;
+
+    // Base segment
     $.beginPath(); $.arc(p.x, p.y, r, 0, Math.PI*2);
     $.fillStyle = s.col; $.fill();
-    if (i%3===0) {
-      $.beginPath(); $.arc(p.x, p.y, r*0.6, 0, Math.PI*2);
-      $.fillStyle = 'rgba(255,255,255,0.1)'; $.fill();
+
+    // Skin pattern
+    if (pat === 'stripes' && i % 2 === 0) {
+      $.beginPath(); $.arc(p.x, p.y, r, 0, Math.PI*2);
+      $.fillStyle = s.col2; $.fill();
+    } else if (pat === 'dots' && i % 3 === 0) {
+      $.beginPath(); $.arc(p.x, p.y, r*0.5, 0, Math.PI*2);
+      $.fillStyle = s.col2; $.fill();
+    } else if (pat === 'zigzag' && i % 2 === 0) {
+      $.beginPath(); $.arc(p.x + r*0.3, p.y - r*0.3, r*0.5, 0, Math.PI*2);
+      $.fillStyle = s.col2; $.fill();
+    } else if (pat === 'camo' && i % 2 === 0) {
+      $.beginPath(); $.arc(p.x+r*0.25, p.y-r*0.15, r*0.5, 0, Math.PI*2);
+      $.fillStyle = s.col2; $.globalAlpha = 0.7; $.fill(); $.globalAlpha = 1;
+    } else if (pat === 'neon' && i % 2 === 0) {
+      $.beginPath(); $.arc(p.x, p.y, r+2, 0, Math.PI*2);
+      $.strokeStyle = s.col2; $.lineWidth = 2; $.stroke();
     }
   }
 
@@ -420,19 +735,56 @@ function drawSnakeBody(s, isPlayer) {
   if (!h) return;
   const a = s.angle;
 
-  const headScale = 1 + Math.min(s.len, 150) / 100;
+  const headScale = 1 + Math.min(s.len, 900) / 100; // max 10x
   if (isPlayer && headImg.complete && headImg.naturalWidth > 0) {
-    // Player face image
-    const sz = HEAD_R * 2 * headScale;
+    const hr = HEAD_R * headScale;
+
+    // Draw face image (clipped to circle)
     $.save();
     $.translate(h.x, h.y);
     $.rotate(a + Math.PI/2);
-    const hr = HEAD_R * headScale;
+    $.save();
     $.beginPath();
     $.arc(0, 0, hr, 0, Math.PI*2);
     $.clip();
     $.drawImage(headImg, -hr, -hr, hr*2, hr*2);
-    $.restore();
+    $.restore(); // removes clip, keeps translate+rotate
+
+    // Red glowing eyes on the boy's actual eyes (in rotated local coords)
+    // Boy's left eye ~(-0.28hr, -0.15hr), right eye ~(0.18hr, -0.18hr) relative to center
+    if (hr * 2 > c.width * 0.15 / camScale) {
+      const eyeR = hr * 0.1;
+      const eyes = [
+        { x: -0.28 * hr, y: -0.15 * hr },
+        { x:  0.18 * hr, y: -0.18 * hr }
+      ];
+      for (const eye of eyes) {
+        // Red glow
+        $.beginPath(); $.arc(eye.x, eye.y, eyeR * 3, 0, Math.PI * 2);
+        const eg = $.createRadialGradient(eye.x, eye.y, 0, eye.x, eye.y, eyeR * 3);
+        eg.addColorStop(0, 'rgba(255,0,0,0.7)');
+        eg.addColorStop(0.5, 'rgba(255,0,0,0.2)');
+        eg.addColorStop(1, 'transparent');
+        $.fillStyle = eg; $.fill();
+        // Eye
+        $.beginPath(); $.arc(eye.x, eye.y, eyeR, 0, Math.PI * 2);
+        $.fillStyle = '#ff0000'; $.fill();
+        $.beginPath(); $.arc(eye.x, eye.y, eyeR * 0.4, 0, Math.PI * 2);
+        $.fillStyle = '#330000'; $.fill();
+      }
+    }
+
+    // Crown if biggest snake
+    if (isPlayerBiggest()) {
+      const crownSize = hr * 0.9;
+      $.font = `${Math.round(crownSize * 1.6)}px sans-serif`;
+      $.textAlign = 'center';
+      $.textBaseline = 'middle';
+      $.fillText('👑', 0, -hr - crownSize * 0.4);
+    }
+
+    $.restore(); // removes translate+rotate
+
     // Ring
     $.beginPath(); $.arc(h.x, h.y, hr+2, 0, Math.PI*2);
     $.strokeStyle = s.col; $.lineWidth = 3; $.stroke();
@@ -460,7 +812,7 @@ function drawSnakeBody(s, isPlayer) {
 }
 
 function drawLeaderboard() {
-  const entries = [{name:'Du', score:player.score, me:true}];
+  const entries = [{name:playerName||'Du', score:player.score, me:true}];
   for (const b of bots) if(b.alive) entries.push({name:b.name, score:b.score, me:false});
   entries.sort((a,b) => b.score-a.score);
 
@@ -500,50 +852,197 @@ function drawMinimap() {
   }
 }
 
-function drawMenu() {
-  $.fillStyle = 'white';
-  $.font = 'bold 70px sans-serif';
+function drawHighscoreTable(cx, startY) {
+  const hs = getHighscores();
+  if (hs.length === 0) return;
+
+  $.fillStyle = '#666';
+  $.font = 'bold 16px sans-serif';
   $.textAlign = 'center';
-  $.fillText('ORM.io', c.width/2, c.height/2-60);
+  $.fillText('TOPPLISTA', cx, startY);
+
+  $.font = '14px sans-serif';
+  for (let i = 0; i < hs.length; i++) {
+    const e = hs[i];
+    $.fillStyle = i === 0 ? '#ffeb3b' : i === 1 ? '#ccc' : i === 2 ? '#cd7f32' : '#777';
+    $.textAlign = 'left';
+    $.fillText(`${i+1}. ${e.name}`, cx - 130, startY + 25 + i*22);
+    $.textAlign = 'right';
+    $.fillText(`${e.score} poäng`, cx + 130, startY + 25 + i*22);
+    $.textAlign = 'center';
+  }
+}
+
+function drawMenu() {
+  $.textAlign = 'center';
+
+  // Title
+  $.fillStyle = 'white';
+  $.font = 'bold 80px sans-serif';
+  $.fillText('ORM.io', c.width/2, c.height/2-120);
   $.font = '20px sans-serif';
   $.fillStyle = '#aaa';
-  $.fillText('Ät mat, väx, krossa motståndare!', c.width/2, c.height/2-10);
-  $.font = '16px sans-serif';
-  $.fillStyle = '#666';
-  $.fillText('Piltangenter = Sväng  |  Mellanslag = Boost', c.width/2, c.height/2+25);
-  $.font = 'bold 28px sans-serif';
-  $.fillStyle = '#4fc3f7';
-  $.fillText('Tryck ENTER för att spela', c.width/2, c.height/2+80);
+  $.fillText('Ät mat, väx, krossa motståndare!', c.width/2, c.height/2-75);
+
+  // Space for the HTML name input (positioned via CSS)
+
+  // Controls
+  $.font = '14px sans-serif';
+  $.fillStyle = '#555';
+  $.fillText('Piltangenter = Sväng  |  Mellanslag = Boost', c.width/2, c.height/2+80);
+
+  // Highscores
+  drawHighscoreTable(c.width/2, c.height/2 + 120);
 }
 
 function drawDead() {
-  $.fillStyle = 'rgba(0,0,0,0.7)';
+  // Draw world behind
+  const cam = deathCam;
+  $.save();
+  $.translate(-cam.x, -cam.y);
+
+  // Grid
+  $.strokeStyle = 'rgba(255,255,255,0.03)';
+  $.lineWidth = 1;
+  const gx = Math.floor(cam.x/50)*50;
+  const gy = Math.floor(cam.y/50)*50;
+  for (let x = gx; x < cam.x+c.width+50; x += 50) {
+    $.beginPath(); $.moveTo(x, cam.y); $.lineTo(x, cam.y+c.height); $.stroke();
+  }
+  for (let y = gy; y < cam.y+c.height+50; y += 50) {
+    $.beginPath(); $.moveTo(cam.x, y); $.lineTo(cam.x+c.width, y); $.stroke();
+  }
+
+  // Border
+  $.strokeStyle = 'rgba(255,50,50,0.5)';
+  $.lineWidth = 4;
+  $.strokeRect(-WORLD/2, -WORLD/2, WORLD, WORLD);
+
+  // Food (emoji)
+  const t = Date.now()/1000;
+  $.textAlign = 'center'; $.textBaseline = 'middle';
+  for (const f of foods) {
+    if (f.x<cam.x-30||f.x>cam.x+c.width+30||f.y<cam.y-30||f.y>cam.y+c.height+30) continue;
+    const bounce = 1+Math.sin(t*2.5+f.x+f.y)*0.1;
+    $.font = `${Math.round(f.r*2*bounce)}px sans-serif`;
+    $.fillText(f.emoji, f.x, f.y);
+  }
+  $.textBaseline = 'alphabetic';
+
+  // Particles
+  for (const p of particles) {
+    $.globalAlpha = Math.max(0, p.life/30);
+    $.beginPath(); $.arc(p.x, p.y, p.r, 0, Math.PI*2);
+    $.fillStyle = p.col; $.fill();
+  }
+  $.globalAlpha = 1;
+
+  // Bots
+  for (const bot of bots) { if (bot.alive) drawSnakeBody(bot, false); }
+  $.restore();
+
+  // Dark overlay
+  $.fillStyle = 'rgba(0,0,0,0.6)';
   $.fillRect(0, 0, c.width, c.height);
-  $.fillStyle = '#e91e63';
-  $.font = 'bold 56px sans-serif';
+
+  // Popup box
+  const hs = getHighscores();
+  const hasHs = hs.length > 0;
+  const boxH = hasHs ? 380 : 240;
+  const bw = 520, bh = boxH;
+  const bx = c.width/2 - bw/2, by = c.height/2 - bh/2;
+  $.fillStyle = 'rgba(15,15,15,0.92)';
+  $.beginPath();
+  $.roundRect(bx, by, bw, bh, 16);
+  $.fill();
+  $.strokeStyle = 'rgba(255,255,255,0.1)';
+  $.lineWidth = 1;
+  $.beginPath();
+  $.roundRect(bx, by, bw, bh, 16);
+  $.stroke();
+
   $.textAlign = 'center';
-  $.fillText('Game Over!', c.width/2, c.height/2-50);
+  let yy = by + 50;
+
+  $.fillStyle = '#e91e63';
+  $.font = 'bold 36px sans-serif';
+  $.fillText('Åh nej, du dog!', c.width/2, yy);
+  yy += 40;
+
+  if (wasHighscore) {
+    $.fillStyle = '#ffeb3b';
+    $.font = 'bold 18px sans-serif';
+    $.fillText('Ny highscore!', c.width/2, yy);
+    yy += 30;
+  } else {
+    yy += 10;
+  }
+
   $.fillStyle = '#aaa';
-  $.font = '24px sans-serif';
-  $.fillText('Poäng: ' + player.score + '  |  Kills: ' + kills, c.width/2, c.height/2+10);
+  $.font = '20px sans-serif';
+  $.fillText('Poäng: ' + lastScore + '  |  Kills: ' + lastKills + '  |  Längd: ' + lastLength, c.width/2, yy);
+  yy += 40;
+
+  // Highscore table in popup
+  if (hasHs) {
+    $.fillStyle = '#666';
+    $.font = 'bold 15px sans-serif';
+    $.fillText('TOPPLISTA', c.width/2, yy);
+    yy += 22;
+
+    $.font = '14px sans-serif';
+    const top5 = hs.slice(0, 5);
+    for (let i = 0; i < top5.length; i++) {
+      const e = top5[i];
+      const isMe = e.score === lastScore && e.name === playerName;
+      $.fillStyle = isMe ? '#4fc3f7' : '#888';
+      $.font = (isMe ? 'bold ' : '') + '14px sans-serif';
+      $.textAlign = 'left';
+      $.fillText(`${i+1}. ${e.name}`, c.width/2 - 120, yy);
+      $.textAlign = 'right';
+      $.fillText(`${e.score} poäng`, c.width/2 + 120, yy);
+      $.textAlign = 'center';
+      yy += 22;
+    }
+    yy += 10;
+  }
+
   $.fillStyle = '#4fc3f7';
-  $.font = 'bold 22px sans-serif';
-  $.fillText('Tryck ENTER för att spela igen', c.width/2, c.height/2+60);
+  $.font = 'bold 18px sans-serif';
+  $.fillText('Tryck på ENTER för att försöka igen!', c.width/2, yy + 5);
 }
 
 // --- LOOP ---
 addEventListener('keydown', e => {
   if (e.key === 'Enter') {
-    if (phase === 'menu' || phase === 'dead') initGame();
+    if (phase === 'menu') initGame();
+    else if (phase === 'dead') {
+      phase = 'menu';
+      showNameInput();
+    }
   }
 });
 
-function loop() {
-  update();
+// Fixed timestep physics (60fps), render at screen rate
+const TICK_MS = 1000 / 60;
+let accumulator = 0;
+let lastTime = 0;
+
+function loop(timestamp) {
+  if (!lastTime) lastTime = timestamp;
+  const elapsed = Math.min(timestamp - lastTime, 100); // cap to avoid spiral of death
+  lastTime = timestamp;
+  accumulator += elapsed;
+
+  while (accumulator >= TICK_MS) {
+    update();
+    accumulator -= TICK_MS;
+  }
+
   draw();
   requestAnimationFrame(loop);
 }
-loop();
+requestAnimationFrame(loop);
 </script>
 </body>
 </html>

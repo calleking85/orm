@@ -1,0 +1,1282 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sommarskuggans Äventyr</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            overflow: hidden;
+        }
+        #gameContainer {
+            position: relative;
+            border: 4px solid #333;
+            border-radius: 8px;
+            box-shadow: 0 0 40px rgba(0,122,255,0.3);
+        }
+        canvas {
+            display: block;
+            border-radius: 4px;
+        }
+        #startScreen, #gameOverScreen, #winScreen {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0,0,0,0.85);
+            border-radius: 4px;
+            z-index: 10;
+        }
+        .screen-title {
+            font-size: 48px;
+            font-weight: 900;
+            color: #FFD700;
+            text-shadow: 3px 3px 0 #c7a200, 0 0 30px rgba(255,215,0,0.5);
+            margin-bottom: 10px;
+        }
+        .screen-subtitle {
+            font-size: 18px;
+            color: #aaa;
+            margin-bottom: 30px;
+        }
+        .screen-info {
+            font-size: 16px;
+            color: #ddd;
+            margin-bottom: 8px;
+        }
+        .start-btn {
+            margin-top: 20px;
+            padding: 15px 50px;
+            font-size: 22px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #FFD700, #FFA500);
+            color: #1a1a2e;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .start-btn:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 25px rgba(255,215,0,0.6);
+        }
+        .hidden { display: none !important; }
+        #hud {
+            position: absolute;
+            top: 10px; left: 10px; right: 10px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 20px;
+            font-weight: 700;
+            color: #fff;
+            text-shadow: 2px 2px 0 rgba(0,0,0,0.7);
+            z-index: 5;
+            pointer-events: none;
+        }
+        #musicToggle {
+            position: absolute;
+            top: 10px;
+            right: 120px;
+            z-index: 15;
+            background: rgba(0,0,0,0.5);
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 20px;
+            color: #fff;
+            font-size: 16px;
+            padding: 4px 12px;
+            cursor: pointer;
+            pointer-events: all;
+        }
+        #musicToggle:hover { background: rgba(0,0,0,0.7); }
+        #mobileControls {
+            display: none;
+            position: absolute;
+            bottom: 20px;
+            left: 0; right: 0;
+            padding: 0 20px;
+            z-index: 5;
+        }
+        .mobile-btn {
+            width: 65px; height: 65px;
+            border-radius: 50%;
+            background: rgba(255,255,255,0.2);
+            border: 2px solid rgba(255,255,255,0.4);
+            color: white;
+            font-size: 28px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+        }
+        .mobile-left-controls, .mobile-right-controls {
+            position: absolute;
+            bottom: 20px;
+            display: flex;
+            gap: 10px;
+        }
+        .mobile-left-controls { left: 20px; }
+        .mobile-right-controls { right: 20px; }
+        @media (pointer: coarse) {
+            #mobileControls { display: block; }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="game"></canvas>
+        <div id="hud">
+            <div id="score">Poäng: 0</div>
+            <div id="lives">❤️❤️❤️</div>
+            <div id="level">Nivå 1</div>
+        </div>
+        <div id="startScreen">
+            <div class="screen-title">SOMMARSKUGGANS<br>ÄVENTYR</div>
+            <div class="screen-subtitle">Ett plattformsspel i sommarsol</div>
+            <div class="screen-info">⬅️➡️ Röra sig &nbsp; ⬆️/SPACE Hoppa</div>
+            <div class="screen-info">Samla solar ☀️ och besegra fiender!</div>
+            <button class="start-btn" onclick="startGame()">STARTA SPELET</button>
+        </div>
+        <div id="gameOverScreen" class="hidden">
+            <div class="screen-title" style="color:#FF4444">GAME OVER</div>
+            <div class="screen-subtitle" id="finalScore">Poäng: 0</div>
+            <button class="start-btn" onclick="startGame()">FÖRSÖK IGEN</button>
+        </div>
+        <div id="winScreen" class="hidden">
+            <div class="screen-title">GRATTIS! 🎉</div>
+            <div class="screen-subtitle" id="winScore">Poäng: 0</div>
+            <div class="screen-info">Sommarskuggan räddade sommaren!</div>
+            <button class="start-btn" onclick="startGame()">SPELA IGEN</button>
+        </div>
+        <button id="musicToggle" onclick="toggleMusic()">🔇 Musik</button>
+        <div id="mobileControls">
+            <div class="mobile-left-controls">
+                <div class="mobile-btn" id="btnLeft">◀</div>
+                <div class="mobile-btn" id="btnRight">▶</div>
+            </div>
+            <div class="mobile-right-controls">
+                <div class="mobile-btn" id="btnJump">▲</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    // Responsive canvas
+    const GAME_WIDTH = 960;
+    const GAME_HEIGHT = 540;
+    canvas.width = GAME_WIDTH;
+    canvas.height = GAME_HEIGHT;
+
+    const TILE = 32;
+    const GRAVITY = 0.6;
+    const JUMP_FORCE = -12;
+    const MOVE_SPEED = 4;
+    const MAX_FALL = 12;
+
+    // Load Sommarskuggan image
+    const sommarskugganImg = new Image();
+    sommarskugganImg.src = '../../sommarskuggan/grafik/sommarskuggan_player.png';
+
+    // Background music
+    const bgMusic = new Audio('musik/spooky_loop.mp3');
+    bgMusic.loop = true;
+    bgMusic.volume = 0.4;
+    let musicPlaying = false;
+
+    function toggleMusic() {
+        const btn = document.getElementById('musicToggle');
+        if (musicPlaying) {
+            bgMusic.pause();
+            musicPlaying = false;
+            btn.textContent = '🔇 Musik';
+        } else {
+            bgMusic.play();
+            musicPlaying = true;
+            btn.textContent = '🔊 Musik';
+        }
+    }
+
+    // Game state
+    let gameState = 'start'; // start, playing, gameover, win
+    let score = 0;
+    let lives = 3;
+    let currentLevel = 0;
+    let camera = { x: 0 };
+    let particles = [];
+    let screenShake = 0;
+
+    // Input
+    const keys = {};
+    window.addEventListener('keydown', e => {
+        keys[e.code] = true;
+        if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) {
+            e.preventDefault();
+        }
+    });
+    window.addEventListener('keyup', e => keys[e.code] = false);
+
+    // Mobile controls
+    function setupMobile(id, code) {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        const start = (e) => { e.preventDefault(); keys[code] = true; };
+        const end = (e) => { e.preventDefault(); keys[code] = false; };
+        btn.addEventListener('touchstart', start, {passive:false});
+        btn.addEventListener('touchend', end, {passive:false});
+        btn.addEventListener('mousedown', start);
+        btn.addEventListener('mouseup', end);
+    }
+    setupMobile('btnLeft', 'ArrowLeft');
+    setupMobile('btnRight', 'ArrowRight');
+    setupMobile('btnJump', 'Space');
+
+    // Player
+    // Create a processed version of the Sommarskuggan sprite
+    const spriteCanvas = document.createElement('canvas');
+    const spriteCtx = spriteCanvas.getContext('2d');
+    const SPRITE_W = 36;
+    const SPRITE_H = 52;
+    spriteCanvas.width = SPRITE_W;
+    spriteCanvas.height = SPRITE_H;
+    let spriteReady = false;
+
+    sommarskugganImg.onload = function() {
+        // Draw the image scaled to sprite size
+        spriteCtx.drawImage(sommarskugganImg, 0, 0, SPRITE_W, SPRITE_H);
+        spriteReady = true;
+    };
+
+    // Also create a flipped version
+    const spriteCanvasFlipped = document.createElement('canvas');
+    const spriteFlippedCtx = spriteCanvasFlipped.getContext('2d');
+    spriteCanvasFlipped.width = SPRITE_W;
+    spriteCanvasFlipped.height = SPRITE_H;
+
+    sommarskugganImg.addEventListener('load', function() {
+        spriteFlippedCtx.translate(SPRITE_W, 0);
+        spriteFlippedCtx.scale(-1, 1);
+        spriteFlippedCtx.drawImage(sommarskugganImg, 0, 0, SPRITE_W, SPRITE_H);
+    });
+
+    let player = {
+        x: 64, y: 300, w: 36, h: 52,
+        vx: 0, vy: 0,
+        onGround: false,
+        facing: 1,
+        frame: 0,
+        animTimer: 0,
+        invincible: 0,
+        isDead: false
+    };
+
+    // Entity arrays
+    let coins = [];
+    let enemies = [];
+    let flags = [];
+    let movingPlatforms = [];
+    let springs = [];
+
+    // Levels - tile maps
+    // 0=air, 1=grass, 2=dirt, 3=brick, 4=question block, 5=pipe_top, 6=pipe_body, 7=wood_platform
+    const levels = [
+        // Level 1 - Sommarens Början
+        {
+            name: "Sommarens Början",
+            bgColor1: '#87CEEB', bgColor2: '#E0F7FA',
+            map: [
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                     333                              333                                                   ',
+                '                                                                                                            ',
+                '            4  4                  333            4                        333                                ',
+                '                            33                                                      4                       ',
+                '                                       77777                     333                                         ',
+                '       33                                                                    77777                          ',
+                '                   55                                 55                                          F         ',
+                '               33  66        55              33       66              55                    33               ',
+                '                   66        66                       66              66                                    ',
+                '1111111  111111111111111  11111111111  111111111111111111111  11111111111111  111111111111111111111111111111111 ',
+                '2222222  222222222222222  22222222222  222222222222222222222  22222222222222  222222222222222222222222222222222 ',
+                '2222222  222222222222222  22222222222  222222222222222222222  22222222222222  222222222222222222222222222222222 ',
+            ],
+            coins: [
+                {x:6,y:9},{x:7,y:9},{x:8,y:9},
+                {x:12,y:6},{x:14,y:6},
+                {x:22,y:4},{x:23,y:4},{x:24,y:4},
+                {x:30,y:7},{x:31,y:7},{x:32,y:7},
+                {x:35,y:8},{x:36,y:8},
+                {x:42,y:6},{x:43,y:3},{x:44,y:3},
+                {x:50,y:4},{x:51,y:4},{x:52,y:4},
+                {x:55,y:8},{x:56,y:8},{x:57,y:8},{x:58,y:8},{x:59,y:8},
+                {x:65,y:9},{x:66,y:9},{x:67,y:9},{x:68,y:9},{x:69,y:9},
+                {x:75,y:6},{x:76,y:6},{x:77,y:6},
+                {x:82,y:6},
+                {x:90,y:9},{x:91,y:9},{x:92,y:9},
+            ],
+            enemies: [
+                {x:15,y:13,type:'goomba'},{x:28,y:13,type:'goomba'},
+                {x:40,y:13,type:'goomba'},{x:55,y:13,type:'goomba'},
+                {x:70,y:13,type:'goomba'},{x:85,y:13,type:'goomba'},
+            ],
+            springs: [{x:45,y:13}],
+            movingPlatforms: [
+                {x:37,y:8,w:3,dx:3,speed:1},
+                {x:62,y:7,w:3,dy:3,speed:0.8},
+            ]
+        },
+        // Level 2 - Skuggans Skog
+        {
+            name: "Skuggans Skog",
+            bgColor1: '#2d5a27', bgColor2: '#1a3a15',
+            map: [
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                           33                                             333                               ',
+                '                                    333        4                                                            ',
+                '               4                                         333                        33                     ',
+                '          333                                                                                               ',
+                '                        55                          55             7777                                     ',
+                '     33                 66      333                  66                          55        333     F         ',
+                '                        66                          66                          66                           ',
+                '                   33   66         55          33   66                     33   66                           ',
+                '                        66         66               66                         66                           ',
+                '111  11111  11111111111111111  1111111111  11111111111111111  1111  111111111111111111  1111111111111111111111 ',
+                '222  22222  22222222222222222  2222222222  22222222222222222  2222  222222222222222222  2222222222222222222222 ',
+                '222  22222  22222222222222222  2222222222  22222222222222222  2222  222222222222222222  2222222222222222222222 ',
+                '222  22222  22222222222222222  2222222222  22222222222222222  2222  222222222222222222  2222222222222222222222 ',
+            ],
+            coins: [
+                {x:5,y:8},{x:6,y:8},
+                {x:10,y:6},{x:11,y:6},{x:12,y:6},
+                {x:15,y:5},{x:20,y:8},{x:21,y:8},
+                {x:28,y:3},{x:29,y:3},{x:30,y:3},
+                {x:35,y:4},{x:36,y:4},{x:37,y:4},
+                {x:42,y:5},{x:43,y:5},
+                {x:48,y:3},{x:49,y:3},{x:50,y:3},
+                {x:55,y:7},{x:56,y:7},{x:57,y:7},{x:58,y:7},
+                {x:65,y:8},{x:66,y:8},
+                {x:70,y:5},{x:71,y:5},{x:72,y:5},
+                {x:80,y:8},{x:81,y:8},
+                {x:88,y:8},{x:89,y:8},{x:90,y:8},
+            ],
+            enemies: [
+                {x:12,y:12,type:'goomba'},{x:22,y:12,type:'koopa'},
+                {x:35,y:12,type:'goomba'},{x:45,y:12,type:'koopa'},
+                {x:58,y:12,type:'goomba'},{x:65,y:12,type:'goomba'},
+                {x:75,y:12,type:'koopa'},{x:85,y:12,type:'goomba'},
+            ],
+            springs: [{x:60,y:12},{x:78,y:12}],
+            movingPlatforms: [
+                {x:18,y:6,w:3,dx:4,speed:1.2},
+                {x:52,y:5,w:3,dy:4,speed:1},
+                {x:72,y:6,w:4,dx:5,speed:0.9},
+            ]
+        },
+        // Level 3 - Sommarskuggans Slott
+        {
+            name: "Sommarskuggans Slott",
+            bgColor1: '#4a0e4e', bgColor2: '#1a0a2e',
+            map: [
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                                                                                                            ',
+                '                  333         4  4  4                       333                                              ',
+                '              33                                                    33                                      ',
+                '          33          333                  333                            33                                 ',
+                '     33                         33                    33                       33                            ',
+                '                           33                              33                       333           F         ',
+                '                33                   333       33                          333                               ',
+                '           33        55                             55                                    333               ',
+                '                     66       33             33     66           33                                          ',
+                '       33            66                             66                          55                           ',
+                '                     66            55               66                          66                           ',
+                '11  111111  11111111111111  111111111111  111111111111111  1111  1111111111111111111111111111111111111111111111',
+                '22  222222  22222222222222  222222222222  222222222222222  2222  2222222222222222222222222222222222222222222222',
+                '22  222222  22222222222222  222222222222  222222222222222  2222  2222222222222222222222222222222222222222222222',
+                '22  222222  22222222222222  222222222222  222222222222222  2222  2222222222222222222222222222222222222222222222',
+            ],
+            coins: [
+                {x:5,y:10},{x:6,y:10},
+                {x:10,y:7},{x:11,y:7},
+                {x:15,y:4},{x:16,y:4},
+                {x:19,y:2},{x:20,y:2},{x:21,y:2},
+                {x:25,y:5},{x:26,y:5},{x:27,y:5},
+                {x:30,y:4},{x:31,y:4},{x:34,y:6},{x:35,y:6},
+                {x:40,y:7},{x:41,y:7},{x:42,y:7},
+                {x:48,y:5},{x:49,y:5},{x:50,y:5},
+                {x:55,y:6},{x:56,y:6},
+                {x:60,y:7},{x:61,y:7},{x:62,y:7},
+                {x:68,y:5},{x:69,y:5},
+                {x:75,y:7},{x:76,y:7},{x:77,y:7},
+                {x:82,y:8},{x:83,y:8},{x:84,y:8},
+                {x:90,y:8},{x:91,y:8},
+            ],
+            enemies: [
+                {x:10,y:12,type:'koopa'},{x:18,y:12,type:'goomba'},
+                {x:28,y:12,type:'koopa'},{x:38,y:12,type:'koopa'},
+                {x:48,y:12,type:'goomba'},{x:55,y:12,type:'koopa'},
+                {x:65,y:12,type:'goomba'},{x:72,y:12,type:'koopa'},
+                {x:80,y:12,type:'goomba'},{x:88,y:12,type:'koopa'},
+            ],
+            springs: [{x:32,y:12},{x:53,y:12},{x:70,y:12}],
+            movingPlatforms: [
+                {x:7,y:8,w:3,dx:3,speed:1.3},
+                {x:35,y:5,w:3,dy:5,speed:1.1},
+                {x:58,y:6,w:4,dx:6,speed:1},
+                {x:78,y:5,w:3,dy:4,speed:1.2},
+            ]
+        }
+    ];
+
+    // Parse level map
+    function parseMap(map) {
+        const tiles = [];
+        for (let y = 0; y < map.length; y++) {
+            tiles[y] = [];
+            for (let x = 0; x < map[y].length; x++) {
+                const ch = map[y][x];
+                let tile = 0;
+                switch(ch) {
+                    case '1': tile = 1; break; // grass
+                    case '2': tile = 2; break; // dirt
+                    case '3': tile = 3; break; // brick
+                    case '4': tile = 4; break; // question
+                    case '5': tile = 5; break; // pipe top
+                    case '6': tile = 6; break; // pipe body
+                    case '7': tile = 7; break; // wood platform
+                    case 'F': tile = 8; break; // flag
+                }
+                tiles[y][x] = tile;
+            }
+        }
+        return tiles;
+    }
+
+    let tiles = [];
+    let levelWidth = 0;
+    let levelHeight = 0;
+
+    // Drawing functions
+    function drawTile(x, y, type) {
+        const sx = x * TILE - camera.x;
+        const sy = y * TILE;
+        if (sx < -TILE || sx > GAME_WIDTH) return;
+
+        switch(type) {
+            case 1: // Grass top
+                ctx.fillStyle = '#4CAF50';
+                ctx.fillRect(sx, sy, TILE, TILE);
+                ctx.fillStyle = '#66BB6A';
+                ctx.fillRect(sx, sy, TILE, 6);
+                // Grass blades
+                ctx.fillStyle = '#81C784';
+                for (let i = 0; i < 3; i++) {
+                    ctx.fillRect(sx + 4 + i*10, sy, 3, 4);
+                }
+                break;
+            case 2: // Dirt
+                ctx.fillStyle = '#8D6E63';
+                ctx.fillRect(sx, sy, TILE, TILE);
+                ctx.fillStyle = '#795548';
+                ctx.fillRect(sx + 4, sy + 4, 6, 6);
+                ctx.fillRect(sx + 20, sy + 16, 5, 5);
+                ctx.fillRect(sx + 10, sy + 22, 4, 4);
+                break;
+            case 3: // Brick
+                ctx.fillStyle = '#E65100';
+                ctx.fillRect(sx, sy, TILE, TILE);
+                ctx.fillStyle = '#BF360C';
+                ctx.fillRect(sx, sy, TILE, 1);
+                ctx.fillRect(sx, sy+15, TILE, 2);
+                ctx.fillRect(sx+15, sy, 2, 16);
+                ctx.fillRect(sx+7, sy+16, 2, 16);
+                ctx.fillRect(sx+23, sy+16, 2, 16);
+                break;
+            case 4: // Question block
+                ctx.fillStyle = '#FFD600';
+                ctx.fillRect(sx, sy, TILE, TILE);
+                ctx.fillStyle = '#FFC107';
+                ctx.fillRect(sx+1, sy+1, TILE-2, TILE-2);
+                ctx.fillStyle = '#FF8F00';
+                ctx.font = 'bold 20px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('?', sx+TILE/2, sy+24);
+                break;
+            case 5: // Pipe top
+                ctx.fillStyle = '#2E7D32';
+                ctx.fillRect(sx-2, sy, TILE+4, TILE);
+                ctx.fillStyle = '#43A047';
+                ctx.fillRect(sx, sy+2, TILE-4, TILE-2);
+                ctx.fillStyle = '#1B5E20';
+                ctx.fillRect(sx-2, sy, TILE+4, 4);
+                break;
+            case 6: // Pipe body
+                ctx.fillStyle = '#2E7D32';
+                ctx.fillRect(sx, sy, TILE, TILE);
+                ctx.fillStyle = '#43A047';
+                ctx.fillRect(sx+4, sy, TILE-8, TILE);
+                break;
+            case 7: // Wood platform
+                ctx.fillStyle = '#A1887F';
+                ctx.fillRect(sx, sy, TILE, TILE/2);
+                ctx.fillStyle = '#8D6E63';
+                ctx.fillRect(sx, sy, TILE, 3);
+                ctx.fillStyle = '#BCAAA4';
+                ctx.fillRect(sx+2, sy+4, TILE-4, 4);
+                break;
+            case 8: // Flag
+                ctx.fillStyle = '#9E9E9E';
+                ctx.fillRect(sx+14, sy, 4, TILE);
+                ctx.fillStyle = '#FFD700';
+                ctx.beginPath();
+                ctx.moveTo(sx+18, sy+2);
+                ctx.lineTo(sx+30, sy+8);
+                ctx.lineTo(sx+18, sy+14);
+                ctx.fill();
+                break;
+        }
+    }
+
+    function drawBackground(level) {
+        const grad = ctx.createLinearGradient(0, 0, 0, GAME_HEIGHT);
+        grad.addColorStop(0, level.bgColor1);
+        grad.addColorStop(1, level.bgColor2);
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        // Clouds
+        ctx.fillStyle = 'rgba(255,255,255,0.4)';
+        for (let i = 0; i < 8; i++) {
+            const cx = ((i * 250 + 100) - camera.x * 0.3) % (GAME_WIDTH + 200) - 50;
+            const cy = 40 + (i % 3) * 50;
+            drawCloud(cx, cy, 40 + (i%2)*20);
+        }
+
+        // Distant hills
+        ctx.fillStyle = 'rgba(0,0,0,0.08)';
+        for (let i = 0; i < 6; i++) {
+            const hx = ((i * 300) - camera.x * 0.15) % (GAME_WIDTH + 400) - 100;
+            ctx.beginPath();
+            ctx.arc(hx, GAME_HEIGHT - 60, 120 + i*20, Math.PI, 0);
+            ctx.fill();
+        }
+    }
+
+    function drawCloud(x, y, size) {
+        ctx.beginPath();
+        ctx.arc(x, y, size*0.5, 0, Math.PI*2);
+        ctx.arc(x+size*0.4, y-size*0.2, size*0.4, 0, Math.PI*2);
+        ctx.arc(x+size*0.8, y, size*0.45, 0, Math.PI*2);
+        ctx.fill();
+    }
+
+    function drawPlayer() {
+        if (player.invincible > 0 && Math.floor(player.invincible/4) % 2) return;
+
+        const px = player.x - camera.x;
+        const py = player.y;
+
+        // Animation offsets
+        const bob = player.onGround && Math.abs(player.vx) > 0.5
+            ? Math.sin(player.animTimer * 0.2) * 3 : 0;
+        const tilt = !player.onGround ? (player.vy < 0 ? -0.15 : 0.1) : 0;
+
+        ctx.save();
+
+        // Position at player center
+        const centerX = px + player.w / 2;
+        const centerY = py + player.h / 2;
+        ctx.translate(centerX, centerY);
+
+        // Flip based on facing direction
+        ctx.scale(player.facing, 1);
+
+        // Tilt when airborne
+        ctx.rotate(tilt * player.facing);
+
+        if (spriteReady) {
+            // Draw the actual Sommarskuggan image, centered and properly sized
+            ctx.drawImage(sommarskugganImg, -SPRITE_W/2, -SPRITE_H/2 + bob, SPRITE_W, SPRITE_H);
+        } else {
+            // Fallback silhouette
+            ctx.translate(-player.w/2, -player.h/2);
+            drawSommarskugganFallback(0, bob);
+        }
+
+        ctx.restore();
+
+        // Shadow on ground
+        if (player.onGround) {
+            ctx.save();
+            ctx.globalAlpha = 0.2;
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.ellipse(px + player.w/2, py + player.h + 2, player.w/2 + 4, 4, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        }
+    }
+
+    function drawSommarskugganFallback(x, y) {
+        // Black shadow body
+        ctx.fillStyle = '#1a1a1a';
+        // Body
+        ctx.beginPath();
+        ctx.ellipse(x + 14, y + 25, 12, 18, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Head
+        ctx.beginPath();
+        ctx.arc(x + 14, y + 8, 10, 0, Math.PI * 2);
+        ctx.fill();
+        // Ears
+        ctx.beginPath();
+        ctx.moveTo(x + 4, y + 4);
+        ctx.lineTo(x + 2, y - 6);
+        ctx.lineTo(x + 10, y + 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(x + 24, y + 4);
+        ctx.lineTo(x + 26, y - 6);
+        ctx.lineTo(x + 18, y + 2);
+        ctx.fill();
+        // Eyes
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.ellipse(x + 10, y + 7, 3, 4, -0.2, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.ellipse(x + 18, y + 7, 3, 4, 0.2, 0, Math.PI * 2);
+        ctx.fill();
+        // Pupils
+        ctx.fillStyle = '#000';
+        ctx.beginPath();
+        ctx.arc(x + 11, y + 7, 1.5, 0, Math.PI * 2);
+        ctx.arc(x + 17, y + 7, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+        // Smile
+        ctx.strokeStyle = '#FF69B4';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(x + 14, y + 10, 5, 0.1, Math.PI - 0.1);
+        ctx.stroke();
+    }
+
+    function drawCoin(coin) {
+        if (coin.collected) return;
+        const cx = coin.x * TILE + TILE/2 - camera.x;
+        const cy = coin.y * TILE + TILE/2;
+        if (cx < -TILE || cx > GAME_WIDTH + TILE) return;
+
+        const pulse = Math.sin(Date.now() * 0.005 + coin.x) * 0.2 + 0.8;
+        const squeeze = Math.abs(Math.sin(Date.now() * 0.003 + coin.x));
+
+        // Sun collectible ☀️
+        ctx.save();
+        ctx.translate(cx, cy);
+
+        // Glow
+        ctx.fillStyle = `rgba(255, 215, 0, ${0.3 * pulse})`;
+        ctx.beginPath();
+        ctx.arc(0, 0, 14, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Sun body
+        ctx.fillStyle = '#FFD700';
+        ctx.beginPath();
+        ctx.arc(0, 0, 8 * squeeze + 2, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Rays
+        ctx.strokeStyle = '#FFA000';
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2 + Date.now() * 0.002;
+            ctx.beginPath();
+            ctx.moveTo(Math.cos(angle) * 9, Math.sin(angle) * 9);
+            ctx.lineTo(Math.cos(angle) * 13, Math.sin(angle) * 13);
+            ctx.stroke();
+        }
+
+        ctx.restore();
+    }
+
+    function drawEnemy(enemy) {
+        if (enemy.dead) return;
+        const ex = enemy.x - camera.x;
+        const ey = enemy.y;
+        if (ex < -TILE*2 || ex > GAME_WIDTH + TILE*2) return;
+
+        if (enemy.type === 'goomba') {
+            // Mushroom-like enemy (toadstool)
+            ctx.fillStyle = '#D32F2F';
+            ctx.beginPath();
+            ctx.arc(ex + 16, ey + 10, 14, Math.PI, 0);
+            ctx.fill();
+            // Spots
+            ctx.fillStyle = '#FFCDD2';
+            ctx.beginPath();
+            ctx.arc(ex + 10, ey + 6, 4, 0, Math.PI * 2);
+            ctx.arc(ex + 22, ey + 4, 3, 0, Math.PI * 2);
+            ctx.fill();
+            // Body
+            ctx.fillStyle = '#8D6E63';
+            ctx.fillRect(ex + 6, ey + 10, 20, 18);
+            // Eyes
+            ctx.fillStyle = '#fff';
+            ctx.beginPath();
+            ctx.arc(ex + 11, ey + 16, 4, 0, Math.PI * 2);
+            ctx.arc(ex + 21, ey + 16, 4, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(ex + 12, ey + 16, 2, 0, Math.PI * 2);
+            ctx.arc(ex + 22, ey + 16, 2, 0, Math.PI * 2);
+            ctx.fill();
+            // Feet
+            ctx.fillStyle = '#5D4037';
+            const walk = Math.sin(Date.now() * 0.008) * 3;
+            ctx.fillRect(ex + 6 + walk, ey + 26, 8, 6);
+            ctx.fillRect(ex + 18 - walk, ey + 26, 8, 6);
+        } else if (enemy.type === 'koopa') {
+            // Turtle-like enemy
+            ctx.fillStyle = '#4CAF50';
+            // Shell
+            ctx.beginPath();
+            ctx.ellipse(ex + 16, ey + 18, 14, 12, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = '#388E3C';
+            ctx.beginPath();
+            ctx.ellipse(ex + 16, ey + 18, 10, 8, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Head
+            ctx.fillStyle = '#FFEB3B';
+            ctx.beginPath();
+            ctx.arc(ex + (enemy.vx > 0 ? 28 : 4), ey + 10, 7, 0, Math.PI * 2);
+            ctx.fill();
+            // Eye
+            ctx.fillStyle = '#000';
+            ctx.beginPath();
+            ctx.arc(ex + (enemy.vx > 0 ? 30 : 2), ey + 9, 2, 0, Math.PI * 2);
+            ctx.fill();
+            // Feet
+            ctx.fillStyle = '#FFEB3B';
+            const walk2 = Math.sin(Date.now() * 0.006) * 3;
+            ctx.fillRect(ex + 6 + walk2, ey + 26, 6, 6);
+            ctx.fillRect(ex + 20 - walk2, ey + 26, 6, 6);
+        }
+    }
+
+    function drawSpring(spring) {
+        const sx = spring.x * TILE - camera.x;
+        const sy = spring.y * TILE;
+        if (sx < -TILE || sx > GAME_WIDTH + TILE) return;
+
+        const compressed = spring.compressed || 0;
+        // Base
+        ctx.fillStyle = '#FF5722';
+        ctx.fillRect(sx + 4, sy + TILE - 8, TILE - 8, 8);
+        // Coil
+        ctx.strokeStyle = '#FF9800';
+        ctx.lineWidth = 3;
+        const coilH = 20 - compressed * 10;
+        for (let i = 0; i < 4; i++) {
+            const cy2 = sy + TILE - 8 - (i+1) * (coilH/4);
+            ctx.beginPath();
+            ctx.moveTo(sx + 6, cy2);
+            ctx.lineTo(sx + TILE - 6, cy2 + coilH/8);
+            ctx.stroke();
+        }
+        // Top
+        ctx.fillStyle = '#FFC107';
+        ctx.fillRect(sx + 2, sy + TILE - 8 - coilH, TILE - 4, 6);
+    }
+
+    function drawMovingPlatform(plat) {
+        const px = plat.x - camera.x;
+        const py = plat.y;
+        ctx.fillStyle = '#78909C';
+        ctx.fillRect(px, py, plat.w * TILE, 10);
+        ctx.fillStyle = '#90A4AE';
+        ctx.fillRect(px + 2, py + 2, plat.w * TILE - 4, 3);
+        // Bolts
+        ctx.fillStyle = '#546E7A';
+        ctx.beginPath();
+        ctx.arc(px + 6, py + 5, 3, 0, Math.PI * 2);
+        ctx.arc(px + plat.w * TILE - 6, py + 5, 3, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Particles
+    function spawnParticles(x, y, color, count) {
+        for (let i = 0; i < count; i++) {
+            particles.push({
+                x, y,
+                vx: (Math.random() - 0.5) * 6,
+                vy: (Math.random() - 0.5) * 6 - 2,
+                life: 30 + Math.random() * 20,
+                color,
+                size: 2 + Math.random() * 4
+            });
+        }
+    }
+
+    function updateParticles() {
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.vy += 0.15;
+            p.life--;
+            p.size *= 0.97;
+            if (p.life <= 0) particles.splice(i, 1);
+        }
+    }
+
+    function drawParticles() {
+        for (const p of particles) {
+            ctx.globalAlpha = p.life / 50;
+            ctx.fillStyle = p.color;
+            ctx.fillRect(p.x - camera.x - p.size/2, p.y - p.size/2, p.size, p.size);
+        }
+        ctx.globalAlpha = 1;
+    }
+
+    // Collision
+    function getTile(x, y) {
+        const tx = Math.floor(x / TILE);
+        const ty = Math.floor(y / TILE);
+        if (ty < 0 || ty >= tiles.length || tx < 0 || tx >= (tiles[0]?.length || 0)) return 0;
+        return tiles[ty][tx];
+    }
+
+    function isSolid(type) {
+        return type === 1 || type === 2 || type === 3 || type === 4 || type === 5 || type === 6;
+    }
+
+    function isPlatform(type) {
+        return type === 7;
+    }
+
+    function rectCollide(a, b) {
+        return a.x < b.x + b.w && a.x + a.w > b.x &&
+               a.y < b.y + b.h && a.y + a.h > b.y;
+    }
+
+    // Sound effects (simple beeps using AudioContext)
+    let audioCtx;
+    function playSound(freq, duration, type = 'square') {
+        try {
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = type;
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + duration);
+        } catch(e) {}
+    }
+
+    function coinSound() { playSound(880, 0.1); setTimeout(() => playSound(1200, 0.15), 80); }
+    function jumpSound() { playSound(300, 0.1, 'triangle'); }
+    function hurtSound() { playSound(200, 0.3, 'sawtooth'); }
+    function stompSound() { playSound(400, 0.1); playSound(600, 0.15); }
+    function springSound() { playSound(500, 0.1); setTimeout(() => playSound(800, 0.1), 50); setTimeout(() => playSound(1100, 0.15), 100); }
+    function winSound() {
+        [523,659,784,1047].forEach((f,i) => setTimeout(() => playSound(f, 0.3, 'triangle'), i*120));
+    }
+
+    // Level loading
+    function loadLevel(idx) {
+        const level = levels[idx];
+        tiles = parseMap(level.map);
+        levelHeight = tiles.length;
+        levelWidth = tiles[0].length;
+
+        player.x = 64;
+        player.y = (levelHeight - 4) * TILE;
+        player.vx = 0;
+        player.vy = 0;
+        player.onGround = false;
+        player.facing = 1;
+        player.invincible = 0;
+        player.isDead = false;
+
+        camera.x = 0;
+        particles = [];
+
+        coins = level.coins.map(c => ({...c, collected: false}));
+        enemies = level.enemies.map(e => ({
+            x: e.x * TILE, y: (levelHeight - 4) * TILE - (e.type === 'koopa' ? 0 : 0),
+            w: 32, h: 32,
+            vx: e.type === 'koopa' ? -1.5 : -1,
+            type: e.type,
+            dead: false,
+            startX: e.x * TILE,
+            range: 80
+        }));
+        // Position enemies on ground
+        enemies.forEach(e => {
+            for (let checkY = 0; checkY < levelHeight; checkY++) {
+                if (isSolid(getTile(e.x + 16, checkY * TILE))) {
+                    e.y = (checkY - 1) * TILE;
+                    break;
+                }
+            }
+        });
+
+        springs = (level.springs || []).map(s => ({...s, compressed: 0}));
+
+        movingPlatforms = (level.movingPlatforms || []).map(mp => ({
+            x: mp.x * TILE, y: mp.y * TILE,
+            w: mp.w,
+            startX: mp.x * TILE, startY: mp.y * TILE,
+            dx: (mp.dx || 0) * TILE, dy: (mp.dy || 0) * TILE,
+            speed: mp.speed, t: 0
+        }));
+
+        document.getElementById('level').textContent = `Nivå ${idx + 1}: ${level.name}`;
+    }
+
+    function startGame() {
+        document.getElementById('startScreen').classList.add('hidden');
+        document.getElementById('gameOverScreen').classList.add('hidden');
+        document.getElementById('winScreen').classList.add('hidden');
+        score = 0;
+        lives = 3;
+        currentLevel = 0;
+        gameState = 'playing';
+        loadLevel(0);
+        updateHUD();
+        // Start music on first play
+        if (!musicPlaying) {
+            bgMusic.play().then(() => {
+                musicPlaying = true;
+                document.getElementById('musicToggle').textContent = '🔊 Musik';
+            }).catch(() => {});
+        }
+    }
+
+    function updateHUD() {
+        document.getElementById('score').textContent = `Poäng: ${score}`;
+        document.getElementById('lives').textContent = '❤️'.repeat(Math.max(0, lives));
+    }
+
+    function playerDie() {
+        lives--;
+        hurtSound();
+        screenShake = 15;
+        spawnParticles(player.x + player.w/2, player.y + player.h/2, '#FF4444', 15);
+
+        if (lives <= 0) {
+            gameState = 'gameover';
+            document.getElementById('finalScore').textContent = `Poäng: ${score}`;
+            document.getElementById('gameOverScreen').classList.remove('hidden');
+        } else {
+            loadLevel(currentLevel);
+        }
+        updateHUD();
+    }
+
+    function nextLevel() {
+        currentLevel++;
+        if (currentLevel >= levels.length) {
+            gameState = 'win';
+            winSound();
+            document.getElementById('winScore').textContent = `Poäng: ${score}`;
+            document.getElementById('winScreen').classList.remove('hidden');
+        } else {
+            loadLevel(currentLevel);
+            updateHUD();
+        }
+    }
+
+    // Game update
+    function update() {
+        if (gameState !== 'playing') return;
+
+        const p = player;
+
+        // Input
+        if (keys['ArrowLeft'] || keys['KeyA']) {
+            p.vx = -MOVE_SPEED;
+            p.facing = -1;
+        } else if (keys['ArrowRight'] || keys['KeyD']) {
+            p.vx = MOVE_SPEED;
+            p.facing = 1;
+        } else {
+            p.vx *= 0.8;
+            if (Math.abs(p.vx) < 0.5) p.vx = 0;
+        }
+
+        if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && p.onGround) {
+            p.vy = JUMP_FORCE;
+            p.onGround = false;
+            jumpSound();
+        }
+
+        // Gravity
+        p.vy += GRAVITY;
+        if (p.vy > MAX_FALL) p.vy = MAX_FALL;
+
+        // Horizontal collision
+        p.x += p.vx;
+        // Left/right tile collision
+        for (let checkY = p.y + 2; checkY < p.y + p.h - 2; checkY += 8) {
+            if (p.vx > 0) {
+                if (isSolid(getTile(p.x + p.w, checkY))) {
+                    p.x = Math.floor((p.x + p.w) / TILE) * TILE - p.w;
+                    p.vx = 0;
+                }
+            } else if (p.vx < 0) {
+                if (isSolid(getTile(p.x, checkY))) {
+                    p.x = Math.floor(p.x / TILE) * TILE + TILE;
+                    p.vx = 0;
+                }
+            }
+        }
+
+        // Vertical collision
+        p.onGround = false;
+        p.y += p.vy;
+
+        if (p.vy > 0) {
+            // Falling - check bottom
+            for (let checkX = p.x + 3; checkX < p.x + p.w - 3; checkX += 8) {
+                const tileType = getTile(checkX, p.y + p.h);
+                if (isSolid(tileType) || isPlatform(tileType)) {
+                    p.y = Math.floor((p.y + p.h) / TILE) * TILE - p.h;
+                    p.vy = 0;
+                    p.onGround = true;
+                }
+            }
+        } else if (p.vy < 0) {
+            // Jumping - check top
+            for (let checkX = p.x + 3; checkX < p.x + p.w - 3; checkX += 8) {
+                if (isSolid(getTile(checkX, p.y))) {
+                    p.y = Math.floor(p.y / TILE) * TILE + TILE;
+                    p.vy = 0;
+                    // Hit question block
+                    const tx = Math.floor(checkX / TILE);
+                    const ty = Math.floor(p.y / TILE);
+                    if (tiles[ty] && tiles[ty][tx] === 4) {
+                        tiles[ty][tx] = 3; // Turn into brick
+                        score += 50;
+                        spawnParticles(tx * TILE + TILE/2, ty * TILE, '#FFD700', 10);
+                        coinSound();
+                        updateHUD();
+                    }
+                }
+            }
+        }
+
+        // Moving platform collision
+        for (const plat of movingPlatforms) {
+            plat.t += plat.speed * 0.01;
+            const oldX = plat.x;
+            const oldY = plat.y;
+            if (plat.dx) {
+                plat.x = plat.startX + Math.sin(plat.t) * plat.dx;
+            }
+            if (plat.dy) {
+                plat.y = plat.startY + Math.sin(plat.t) * plat.dy;
+            }
+
+            const platRect = {x: plat.x, y: plat.y, w: plat.w * TILE, h: 10};
+            if (p.vy >= 0 &&
+                p.x + p.w > platRect.x && p.x < platRect.x + platRect.w &&
+                p.y + p.h >= platRect.y && p.y + p.h <= platRect.y + 16) {
+                p.y = platRect.y - p.h;
+                p.vy = 0;
+                p.onGround = true;
+                p.x += (plat.x - oldX);
+            }
+        }
+
+        // Spring collision
+        for (const spring of springs) {
+            const springRect = {x: spring.x * TILE, y: spring.y * TILE, w: TILE, h: TILE};
+            if (p.vy > 0 && rectCollide({x:p.x, y:p.y, w:p.w, h:p.h}, springRect)) {
+                p.vy = JUMP_FORCE * 1.6;
+                p.onGround = false;
+                spring.compressed = 1;
+                springSound();
+                setTimeout(() => spring.compressed = 0, 200);
+            }
+        }
+
+        // Coin collection
+        for (const coin of coins) {
+            if (coin.collected) continue;
+            const coinRect = {x: coin.x * TILE + 4, y: coin.y * TILE + 4, w: TILE - 8, h: TILE - 8};
+            if (rectCollide({x:p.x, y:p.y, w:p.w, h:p.h}, coinRect)) {
+                coin.collected = true;
+                score += 100;
+                coinSound();
+                spawnParticles(coin.x * TILE + TILE/2, coin.y * TILE + TILE/2, '#FFD700', 8);
+                updateHUD();
+            }
+        }
+
+        // Enemy update & collision
+        for (const enemy of enemies) {
+            if (enemy.dead) continue;
+
+            enemy.x += enemy.vx;
+
+            // Enemy ground check & wall bounce
+            const eRight = enemy.vx > 0 ? enemy.x + enemy.w : enemy.x;
+            const eTileX = Math.floor(eRight / TILE);
+            const eTileY = Math.floor((enemy.y + enemy.h - 1) / TILE);
+            const belowTile = getTile(eRight, enemy.y + enemy.h + 2);
+            const wallTile = getTile(eRight, enemy.y + 8);
+            if (!isSolid(belowTile) || isSolid(wallTile)) {
+                enemy.vx *= -1;
+            }
+
+            // Player vs enemy
+            if (p.invincible <= 0) {
+                const eRect = {x: enemy.x, y: enemy.y, w: enemy.w, h: enemy.h};
+                if (rectCollide({x:p.x, y:p.y, w:p.w, h:p.h}, eRect)) {
+                    // Stomping from above
+                    if (p.vy > 0 && p.y + p.h - 8 < enemy.y + 8) {
+                        enemy.dead = true;
+                        p.vy = JUMP_FORCE * 0.7;
+                        score += 200;
+                        stompSound();
+                        spawnParticles(enemy.x + enemy.w/2, enemy.y + enemy.h/2, '#FF8800', 12);
+                        updateHUD();
+                    } else {
+                        p.invincible = 90;
+                        p.vy = JUMP_FORCE * 0.5;
+                        playerDie();
+                    }
+                }
+            }
+        }
+
+        // Flag (level end)
+        for (let y = 0; y < tiles.length; y++) {
+            for (let x = 0; x < (tiles[y]?.length || 0); x++) {
+                if (tiles[y][x] === 8) {
+                    const flagRect = {x: x * TILE, y: y * TILE, w: TILE, h: TILE};
+                    if (rectCollide({x:p.x, y:p.y, w:p.w, h:p.h}, flagRect)) {
+                        score += 500;
+                        winSound();
+                        updateHUD();
+                        nextLevel();
+                        return;
+                    }
+                }
+            }
+        }
+
+        // Invincibility timer
+        if (p.invincible > 0) p.invincible--;
+
+        // Fall off screen
+        if (p.y > levelHeight * TILE + 100) {
+            playerDie();
+        }
+
+        // Keep player in bounds (left)
+        if (p.x < 0) p.x = 0;
+
+        // Camera
+        const targetCamX = p.x - GAME_WIDTH / 3;
+        camera.x += (targetCamX - camera.x) * 0.1;
+        if (camera.x < 0) camera.x = 0;
+        const maxCam = levelWidth * TILE - GAME_WIDTH;
+        if (camera.x > maxCam) camera.x = maxCam;
+
+        // Screen shake
+        if (screenShake > 0) screenShake--;
+
+        // Animation
+        if (Math.abs(p.vx) > 0.5) p.animTimer++;
+        else p.animTimer = 0;
+
+        updateParticles();
+    }
+
+    // Render
+    function render() {
+        const level = levels[currentLevel] || levels[0];
+
+        ctx.save();
+        if (screenShake > 0) {
+            ctx.translate(
+                (Math.random() - 0.5) * screenShake,
+                (Math.random() - 0.5) * screenShake
+            );
+        }
+
+        drawBackground(level);
+
+        // Draw tiles
+        const startX = Math.floor(camera.x / TILE);
+        const endX = startX + Math.ceil(GAME_WIDTH / TILE) + 2;
+        for (let y = 0; y < tiles.length; y++) {
+            for (let x = startX; x < endX && x < (tiles[y]?.length || 0); x++) {
+                if (tiles[y][x] > 0) {
+                    drawTile(x, y, tiles[y][x]);
+                }
+            }
+        }
+
+        // Springs
+        for (const spring of springs) drawSpring(spring);
+
+        // Moving platforms
+        for (const plat of movingPlatforms) drawMovingPlatform(plat);
+
+        // Coins
+        for (const coin of coins) drawCoin(coin);
+
+        // Enemies
+        for (const enemy of enemies) drawEnemy(enemy);
+
+        // Player
+        drawPlayer();
+
+        // Particles
+        drawParticles();
+
+        ctx.restore();
+    }
+
+    // Game loop
+    function gameLoop() {
+        update();
+        render();
+        requestAnimationFrame(gameLoop);
+    }
+
+    // Init
+    loadLevel(0);
+    gameLoop();
+    </script>
+</body>
+</html>
